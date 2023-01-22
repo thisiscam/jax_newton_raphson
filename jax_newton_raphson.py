@@ -70,6 +70,8 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
              maxiters: int = 10) -> NewtonRaphsonResult:
   """Newton-Raphson minization for strictly convex function in JAX, jit-able.
 
+  Currently assumes that the hessian for all steps are positive definite.
+
   Args:
     fn: the function to minimize. The function must take a vector as input and
       return a scalar.
@@ -141,6 +143,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
     new_fnval, new_jac, new_hessian = value_jac_and_hessian_fn(
         loop_state.new_guess)
 
+    # Use cholesky instead of cho_factor because they are the same on JAX.
     cho_factor = jax.scipy.linalg.cholesky(new_hessian, lower=False)
     is_finite = jnp.logical_and(jnp.all(jnp.isfinite(new_jac)),
                                 jnp.all(jnp.isfinite(cho_factor)))
