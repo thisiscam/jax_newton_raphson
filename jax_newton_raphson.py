@@ -14,21 +14,21 @@ import jax.flatten_util
 import chex
 
 
-def value_and_jacfwd(f, x, has_aux=False):
+def _value_and_jacfwd(f, x, has_aux=False):
   pushfwd = functools.partial(jax.jvp, f, (x,), has_aux=has_aux)
   basis = (jnp.eye(x.size, dtype=x.dtype),)
   out_axes = (None, -1, None) if has_aux else (None, -1)
   return jax.vmap(pushfwd, out_axes=out_axes)(basis)
 
 
-def jacrev_and_value(f, x):
+def _jacrev_and_value(f, x):
   y, pullback = jax.vjp(f, x)
   basis = jnp.eye(y.size, dtype=y.dtype)
   jac = jax.vmap(pullback)(basis.ravel())
   return jac, y
 
 
-def value_jac_and_hessian(f):
+def _value_jac_and_hessian(f):
   """Compute value, jacobian and hessian of a function in one go.
 
   For simplicity, we assume that `f` has vector input and scalar output.
@@ -42,8 +42,8 @@ def value_jac_and_hessian(f):
   """
 
   def wrapped(x):
-    (jac,), (hessian,), value = value_and_jacfwd(
-        functools.partial(jacrev_and_value, f),
+    (jac,), (hessian,), value = _value_and_jacfwd(
+        functools.partial(_jacrev_and_value, f),
         x,
         has_aux=True,
     )
@@ -93,7 +93,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
   def flatten_fn(guess):
     return fn(guess_unraveler(guess))
 
-  value_jac_and_hessian_fn = value_jac_and_hessian(flatten_fn)
+  value_jac_and_hessian_fn = _value_jac_and_hessian(flatten_fn)
   LoopState = collections.namedtuple(
       "LoopState", "guess new_guess fnval jac hessian step converged")
   WorkState = collections.namedtuple(
