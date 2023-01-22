@@ -8,7 +8,7 @@ import functools
 import jax
 import jax.lax
 import jax.numpy as jnp
-import jax.scipy as scipy
+import jax.scipy
 import jax.flatten_util
 
 import chex
@@ -30,12 +30,12 @@ def jacrev_and_value(f, x):
 
 def value_jac_and_hessian(f):
   """Compute value, jacobian and hessian of a function in one go.
-  
-  For simplicity, we assume that the function has vector input and scalar output.
+
+  For simplicity, we assume that `f` has vector input and scalar output.
 
   Args:
     f: the function to compute the value, jacobian and hessian of.
-  
+
   Returns:
     A function that takes a vector and returns a tuple of (value, jacobian,
     hessian).
@@ -68,17 +68,18 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
              rtol=1e-08,
              line_search_factor: float = 0.5,
              maxiters: int = 10) -> NewtonRaphsonResult:
-  """Newton-Raphson minization for convex function in JAX, jit-able; 
+  """Newton-Raphson minization for convex function in JAX, jit-able.
 
   Args:
     fn: the function to minimize. The function must take a vector as input and
       return a scalar.
     initial_guess: the initial guess.
-    atol: the absolute tolerance until which the minimization is considered converged.
-    rtol: the relative tolerance until which the minimization is considered converged.
+    atol: the absolute tolerance for convergence test.
+    rtol: the relative tolerance for convergence test.
     line_search_factor: the factor by which to reduce the step size if the
       function value does not decrease.
-    maxiters: maximum number of optimizer iterations.
+    maxiters: maximum number of optimizer iterations; note that this includes
+      the number of line search steps.
 
   Returns:
     The solved result.
@@ -93,8 +94,8 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
 
   def _newton_guess_update(args):
     loop_state, working_state = args
-    u = scipy.linalg.cho_solve((working_state.cho_factor, False),
-                               working_state.new_jac)
+    u = jax.scipy.linalg.cho_solve((working_state.cho_factor, False),
+                                   working_state.new_jac)
     new_guess_ = loop_state.new_guess - u
     return loop_state._replace(fnval=working_state.new_fnval,
                                guess=loop_state.new_guess,
@@ -138,7 +139,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
     new_fnval, new_jac, new_hessian = value_jac_and_hessian_fn(
         loop_state.new_guess)
 
-    cho_factor = scipy.linalg.cholesky(new_hessian, lower=False)
+    cho_factor = jax.scipy.linalg.cholesky(new_hessian, lower=False)
     is_finite = jnp.logical_and(jnp.all(jnp.isfinite(new_jac)),
                                 jnp.all(jnp.isfinite(cho_factor)))
 
@@ -178,6 +179,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
                             do_recover_last,
                             operand=loop_state)
 
-  return NewtonRaphsonResult(guess_unraveler(loop_state.guess), loop_state.fnval,
-                            loop_state.jac, loop_state.hessian, loop_state.step,
-                            loop_state.converged)
+  return NewtonRaphsonResult(guess_unraveler(loop_state.guess),
+                             loop_state.fnval, loop_state.jac,
+                             loop_state.hessian, loop_state.step,
+                             loop_state.converged)
