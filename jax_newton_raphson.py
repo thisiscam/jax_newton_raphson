@@ -117,7 +117,7 @@ def minimize(
   minimum on a convex function.
 
   Args:
-    fn: the function to minimize. The function must take a vector as input and
+    fn: the function to minimize. The function must take a pytree as input and
       return a scalar.
     initial_guess: the initial guess.
     atol: the absolute tolerance for convergence test.
