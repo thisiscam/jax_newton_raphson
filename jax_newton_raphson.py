@@ -189,7 +189,7 @@ def minimize(
     new_fnval, new_jac, new_hessian = value_jac_and_hessian_fn(
         loop_state.new_guess)
 
-    # If hesseian is not even finite, we just revert gradient descent
+    # If hesseian is not even finite, we just revert to gradient descent
     # We do this before the cholesky factorization to avoid infinite looping
     # in the factorization
     new_hessian = jnp.where(jnp.all(jnp.isfinite(new_hessian)), new_hessian,
