@@ -107,9 +107,14 @@ def minimize(
     cho_beta: float = 1e-08,
     cho_tau_factor: float = 2.,
 ) -> NewtonRaphsonResult:
-  """Newton-Raphson minization for strictly convex function in JAX, jit-able.
+  """Newton-Raphson minization in JAX, jit-able.
 
-  Currently assumes that the hessian for all steps are positive definite.
+  This function implements a variant of Newton-Raphson minimization that
+  includes the following modifications to the vanilla algorithm:
+  1. Cholesky factorization on modified hessian to ensure positive definiteness.
+  2. Line search to ensure that the function value decreases at each step.
+  With these modifications, the algorithm is guaranteed to converge to a global
+  minimum on a convex function.
 
   Args:
     fn: the function to minimize. The function must take a vector as input and
