@@ -1,6 +1,6 @@
 """A simple Newton-Raphson optimizer in JAX."""
 
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Tuple
 
 import collections
 import functools
@@ -86,41 +86,6 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
   """
   chex.assert_shape(jax.eval_shape(fn, initial_guess), tuple())
 
-  def _line_search(args):
-    loop_state, _ = args
-    new_guess_ = (loop_state.new_guess -
-                  loop_state.guess) * line_search_factor + loop_state.guess
-    return loop_state._replace(new_guess=new_guess_)
-
-  def _newton_guess_update(args):
-    loop_state, working_state = args
-    u = jax.scipy.linalg.cho_solve((working_state.cho_factor, False),
-                                   working_state.new_jac)
-    new_guess_ = loop_state.new_guess - u
-    return loop_state._replace(fnval=working_state.new_fnval,
-                               guess=loop_state.new_guess,
-                               new_guess=new_guess_)
-
-  def _do_converged(args):
-    loop_state, working_state = args
-    return loop_state._replace(fnval=working_state.new_fnval,
-                               guess=loop_state.new_guess,
-                               jac=working_state.new_jac,
-                               hessian=working_state.new_hessian,
-                               converged=True)
-
-  def _do_work(args):
-    """Perform an update step if necessary."""
-    _, work_state = args
-    dont_need_line_search = work_state.is_finite
-    dont_need_line_search = jnp.logical_and(dont_need_line_search,
-                                            work_state.fnval_decreased)
-    state = jax.lax.cond(dont_need_line_search,
-                         _newton_guess_update,
-                         _line_search,
-                         operand=args)
-    return state._replace(step=state.step + 1)
-
   initial_guess_flat, guess_unraveler = jax.flatten_util.ravel_pytree(
       initial_guess)
   x_dim = initial_guess_flat.size
@@ -135,7 +100,44 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
       "WorkState",
       "new_fnval new_jac new_hessian cho_factor is_finite fnval_decreased")
 
-  def newton_update(loop_state: LoopState) -> LoopState:
+  def _line_search(args):
+    """Decrease step size by line_search_factor."""
+    loop_state, _ = args
+    new_guess_ = (loop_state.new_guess -
+                  loop_state.guess) * line_search_factor + loop_state.guess
+    return loop_state._replace(new_guess=new_guess_)
+
+  def _newton_guess_update(args):
+    loop_state, working_state = args
+    u = jax.scipy.linalg.cho_solve((working_state.cho_factor, False),
+                                   working_state.new_jac)
+    new_guess_ = loop_state.new_guess - u
+    return loop_state._replace(fnval=working_state.new_fnval,
+                               guess=loop_state.new_guess,
+                               new_guess=new_guess_)
+
+  def _do_work(args: Tuple[LoopState, WorkState]) -> LoopState:
+    """Perform an update step if necessary."""
+    _, work_state = args
+    dont_need_line_search = work_state.is_finite
+    dont_need_line_search = jnp.logical_and(dont_need_line_search,
+                                            work_state.fnval_decreased)
+    loop_state = jax.lax.cond(dont_need_line_search,
+                              _newton_guess_update,
+                              _line_search,
+                              operand=args)
+    return loop_state._replace(step=loop_state.step + 1)
+
+  def _do_converged(args: Tuple[LoopState, WorkState]) -> LoopState:
+    loop_state, working_state = args
+    return loop_state._replace(fnval=working_state.new_fnval,
+                               guess=loop_state.new_guess,
+                               jac=working_state.new_jac,
+                               hessian=working_state.new_hessian,
+                               converged=True)
+
+  def loop_body(loop_state: LoopState) -> LoopState:
+    """Newton-Raphson loop body."""
     new_fnval, new_jac, new_hessian = value_jac_and_hessian_fn(
         loop_state.new_guess)
 
@@ -168,7 +170,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
                             jnp.full_like(initial_guess_flat, jnp.inf),
                             jnp.zeros((x_dim, x_dim)), 0, False)
 
-  loop_state = jax.lax.while_loop(loop_cond, newton_update, initial_state)
+  loop_state = jax.lax.while_loop(loop_cond, loop_body, initial_state)
 
   def do_recover_last(loop_state: LoopState) -> LoopState:
     fnval, jac, hessian = value_jac_and_hessian_fn(loop_state.guess)
