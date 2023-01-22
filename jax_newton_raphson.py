@@ -82,7 +82,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
       the number of line search steps.
 
   Returns:
-    The solved result.
+    The optimizer result.
   """
   chex.assert_shape(jax.eval_shape(fn, initial_guess), tuple())
 
