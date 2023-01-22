@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		// Python formatter
+		"python.formatting.provider": "yapf",
+		"python.formatting.yapfArgs": [
+			"--style",
+			"{based_on_style: google, indent_width: 2}"
+		],
+		"editor.formatOnSave": true,
+		"python.linting.pylintEnabled": true,
+		"python.linting.enabled": true,
+		"editor.tabSize": 2
+	}
+}
