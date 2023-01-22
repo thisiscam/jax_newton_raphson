@@ -68,7 +68,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
              rtol=1e-08,
              line_search_factor: float = 0.5,
              maxiters: int = 10) -> NewtonRaphsonResult:
-  """Newton-Raphson minization for convex function in JAX, jit-able.
+  """Newton-Raphson minization for strictly convex function in JAX, jit-able.
 
   Args:
     fn: the function to minimize. The function must take a vector as input and
