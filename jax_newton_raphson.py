@@ -130,7 +130,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
 
   value_jac_and_hessian_fn = value_jac_and_hessian(flatten_fn)
   LoopState = collections.namedtuple(
-      "LoopState", "guess new_guess fnval jac hessian step halving converged")
+      "LoopState", "guess new_guess fnval jac hessian step converged")
   WorkState = collections.namedtuple(
       "WorkState",
       "new_fnval new_jac new_hessian cho_factor is_finite fnval_decreased")
@@ -166,7 +166,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
 
   initial_state = LoopState(initial_guess_flat, initial_guess_flat, jnp.inf,
                             jnp.full_like(initial_guess_flat, jnp.inf),
-                            jnp.zeros((x_dim, x_dim)), 0, 0, False)
+                            jnp.zeros((x_dim, x_dim)), 0, False)
 
   loop_state = jax.lax.while_loop(loop_cond, newton_update, initial_state)
 
