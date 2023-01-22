@@ -168,7 +168,7 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
 
   initial_state = LoopState(initial_guess_flat, initial_guess_flat, jnp.inf,
                             jnp.full_like(initial_guess_flat, jnp.inf),
-                            jnp.zeros((x_dim, x_dim)), 0, False)
+                            jnp.empty((x_dim, x_dim)), 0, False)
 
   loop_state = jax.lax.while_loop(loop_cond, loop_body, initial_state)
 
