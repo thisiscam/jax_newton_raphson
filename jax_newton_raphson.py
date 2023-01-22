@@ -52,6 +52,41 @@ def _value_jac_and_hessian(f):
   return wrapped
 
 
+def _cholesky_with_added_identity(mat: chex.Array,
+                                  cho_beta: float,
+                                  cho_tau_factor: float = 2.) -> chex.Array:
+  """Compute the Cholesky factorization of a matrix with added scaled identity.
+
+  See "Numerical Optimization" by Nocedal and Wright, Algorithm 3.3.
+
+  Args:
+    mat: the matrix to compute the Cholesky factorization of.
+    cho_beta: the heuristically chosen minimal factor to add to the diagonal.
+    cho_tau_factor: the factor by which to increase the diagonal if the matrix
+      is not positive definite.
+
+  Returns:
+    The Cholesky factorization of `mat + identity`.
+  """
+  LoopState = collections.namedtuple("LoopState", "tau cho_factor")
+
+  min_diag = jnp.min(jnp.diagonal(mat))
+  tau0 = jnp.where(min_diag > 0, jnp.zeros_like(min_diag), cho_beta - min_diag)
+
+  def loop_body(state: LoopState) -> LoopState:
+    cho_factor = jax.scipy.linalg.cholesky(mat +
+                                           jnp.eye(mat.shape[0]) * state.tau)
+    tau = jnp.maximum(cho_tau_factor * state.tau, cho_beta)
+    return LoopState(tau, cho_factor)
+
+  loop_state = jax.lax.while_loop(
+      lambda state: jnp.logical_not(jnp.all(jnp.isfinite(state.cho_factor))),
+      loop_body,
+      LoopState(tau0, jnp.full_like(mat, jnp.nan)),
+  )
+  return loop_state.cho_factor
+
+
 class NewtonRaphsonResult(NamedTuple):
   """The result of the Newton-Raphson minimizer."""
   guess: chex.ArrayTree
@@ -62,12 +97,16 @@ class NewtonRaphsonResult(NamedTuple):
   converged: bool
 
 
-def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
-             initial_guess: chex.ArrayTree,
-             atol=1e-05,
-             rtol=1e-08,
-             line_search_factor: float = 0.5,
-             maxiters: int = 10) -> NewtonRaphsonResult:
+def minimize(
+    fn: Callable[[chex.ArrayTree], chex.Scalar],
+    initial_guess: chex.ArrayTree,
+    atol=1e-05,
+    rtol=1e-08,
+    line_search_factor: float = 0.5,
+    maxiters: int = 10,
+    cho_beta: float = 1e-08,
+    cho_tau_factor: float = 2.,
+) -> NewtonRaphsonResult:
   """Newton-Raphson minization for strictly convex function in JAX, jit-able.
 
   Currently assumes that the hessian for all steps are positive definite.
@@ -82,6 +121,8 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
       function value does not decrease.
     maxiters: maximum number of optimizer iterations; note that this includes
       the number of line search steps.
+    cho_beta, cho_tau_factor: for modified cholesky to ensure positive 
+    definiteness of the hessian. See `_cholesky_with_added_identity`.
 
   Returns:
     The optimizer result.
@@ -143,18 +184,21 @@ def minimize(fn: Callable[[chex.ArrayTree], chex.Scalar],
     new_fnval, new_jac, new_hessian = value_jac_and_hessian_fn(
         loop_state.new_guess)
 
-    # Use cholesky instead of cho_factor because they are the same on JAX.
-    cho_factor = jax.scipy.linalg.cholesky(new_hessian, lower=False)
-    is_finite = jnp.logical_and(jnp.all(jnp.isfinite(new_jac)),
-                                jnp.all(jnp.isfinite(cho_factor)))
-
-    is_finite = jnp.logical_and(jnp.all(jnp.isfinite(new_fnval)), is_finite)
-    fnval = loop_state.fnval
-    fnval_decreased = fnval > new_fnval
+    # If hesseian is not even finite, we just revert gradient descent
+    # We do this before the cholesky factorization to avoid infinite looping
+    # in the factorization
+    new_hessian = jnp.where(jnp.all(jnp.isfinite(new_hessian)), new_hessian,
+                            jnp.eye(new_hessian.shape[0]))
+    cho_factor = _cholesky_with_added_identity(new_hessian, cho_beta,
+                                               cho_tau_factor)
+    is_finite = jnp.logical_and(jnp.all(jnp.isfinite(new_fnval)),
+                                jnp.all(jnp.isfinite(new_fnval)))
     converged = jnp.logical_and(
-        is_finite, jnp.allclose(new_fnval, fnval, atol=atol, rtol=rtol))
+        is_finite,
+        jnp.allclose(new_fnval, loop_state.fnval, atol=atol, rtol=rtol))
     loop_state = loop_state._replace(converged=converged)
 
+    fnval_decreased = loop_state.fnval > new_fnval
     working_state = WorkState(new_fnval, new_jac, new_hessian, cho_factor,
                               is_finite, fnval_decreased)
 
