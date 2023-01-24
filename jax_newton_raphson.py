@@ -98,14 +98,12 @@ class NewtonRaphsonResult(NamedTuple):
 
   @property
   def msg(self):
-    if self.status == 0:
-      return "Converged"
-    elif self.status == 1:
-      return "Maximum number of iterations reached"
-    elif self.status == 2:
-      return "Maximum number of line search steps reached"
-    else:
-      return "Unknown status"
+    msgs = {
+        0: "converged",
+        1: "maximum number of iterations reached",
+        2: "maximum number of line search steps reached",
+    }
+    return msgs.get(self.status, "unknown status")
 
 
 def minimize(
@@ -119,21 +117,23 @@ def minimize(
     cho_beta: float = 1e-08,
     cho_tau_factor: float = 2.,
 ) -> NewtonRaphsonResult:
-  """Newton-Raphson minization in JAX, jit-able.
+  """Newton-Raphson minization in JAX, batchable and jit-able.
 
   This function implements a variant of Newton-Raphson minimization that
   includes the following modifications to the vanilla algorithm:
   1. Cholesky factorization on modified hessian to ensure positive definiteness.
   2. Backtracking line search to ensure that the function value decreases
-  sufficiently at each step, that is, the step satisfies the Armijo condition.
-  With these modifications, the algorithm is guaranteed to converge to a global
-  minimum on a convex function.
+  sufficiently at each step, that is, each newton step satisfies the Armijo
+  condition. With these modifications, the algorithm is guaranteed to converge
+  to a global minimum on a convex function.
 
-  Note that this implementation to sychronizes the calculations of the
+  Note that this implementation sychronizes the calculations of the
   function's value, jacobian and hessian, when user invokes it in
   batch mode via `jax.vmap`. In particular, this means that for a single
   iteration of the optimizer loop, the algorithm can either take a line search
-  step or a Newton step.
+  step or a Newton step. In principle, this minimizes thread divergence in
+  batch mode. However, the tradeoff is that the algorithm does one redundant
+  hessian evaluation for each backtracking line search step.
 
   Args:
     fn: the function to minimize. The function must take a pytree as input and
