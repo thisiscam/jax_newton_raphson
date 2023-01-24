@@ -170,8 +170,7 @@ def minimize(
 
   # For internal temporay storage inside the loop body
   WorkingState = collections.namedtuple(
-      "WorkingState",
-      "new_fnval new_jac new_hessian cho_factor is_finite fnval_decreased")
+      "WorkingState", "new_fnval new_jac new_hessian is_finite fnval_decreased")
 
   def _ls_step(args):
     """Backtracking linesearch: Decrease step size by line_search_factor."""
@@ -184,8 +183,15 @@ def minimize(
   def _newton_guess_update(args):
     """Update the guess using the Newton-Raphson step."""
     loop_state, working_state = args
-    u = jax.scipy.linalg.cho_solve((working_state.cho_factor, False),
-                                   working_state.new_jac)
+    # If hesseian is not even finite, we just revert to gradient descent
+    # We do this before the cholesky factorization to avoid infinite looping
+    # in the factorization
+    new_hessian = working_state.new_hessian
+    new_hessian = jnp.where(jnp.all(jnp.isfinite(new_hessian)), new_hessian,
+                            jnp.eye(new_hessian.shape[0]))
+    cho_factor = _cholesky_with_added_identity(new_hessian, cho_beta,
+                                               cho_tau_factor)
+    u = jax.scipy.linalg.cho_solve((cho_factor, False), working_state.new_jac)
     new_guess_ = loop_state.new_guess - u
     return loop_state._replace(fnval=working_state.new_fnval,
                                guess=loop_state.new_guess,
@@ -197,14 +203,14 @@ def minimize(
       args: Tuple[LoopState, WorkingState]) -> LoopState:
     """Perform an update step if necessary."""
     _, work_state = args
-    dont_need_line_search = work_state.is_finite
-    dont_need_line_search = (dont_need_line_search & work_state.fnval_decreased)
+    dont_need_line_search = work_state.is_finite & work_state.fnval_decreased
     return jax.lax.cond(dont_need_line_search,
                         _newton_guess_update,
                         _ls_step,
                         operand=args)
 
   def _do_converged(args: Tuple[LoopState, WorkingState]) -> LoopState:
+    """Return the converged state."""
     loop_state, working_state = args
     return loop_state._replace(fnval=working_state.new_fnval,
                                guess=loop_state.new_guess,
@@ -217,13 +223,6 @@ def minimize(
     new_fnval, new_jac, new_hessian = value_jac_and_hessian_fn(
         loop_state.new_guess)
 
-    # If hesseian is not even finite, we just revert to gradient descent
-    # We do this before the cholesky factorization to avoid infinite looping
-    # in the factorization
-    new_hessian = jnp.where(jnp.all(jnp.isfinite(new_hessian)), new_hessian,
-                            jnp.eye(new_hessian.shape[0]))
-    cho_factor = _cholesky_with_added_identity(new_hessian, cho_beta,
-                                               cho_tau_factor)
     is_finite = (jnp.all(jnp.isfinite(new_fnval)) &
                  jnp.all(jnp.isfinite(new_jac)))
     converged = (is_finite & jnp.allclose(
@@ -233,8 +232,8 @@ def minimize(
         new_fnval <= loop_state.fnval +
         loop_state.jac @ (loop_state.new_guess - loop_state.guess))
 
-    working_state = WorkingState(new_fnval, new_jac, new_hessian, cho_factor,
-                                 is_finite, fnval_decreased)
+    working_state = WorkingState(new_fnval, new_jac, new_hessian, is_finite,
+                                 fnval_decreased)
 
     return jax.lax.cond(
         (converged & ((loop_state.newton_step > 0) | (loop_state.ls_step > 0))),
