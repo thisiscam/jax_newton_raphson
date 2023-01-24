@@ -227,6 +227,7 @@ def minimize(
                  jnp.all(jnp.isfinite(new_jac)))
     converged = (is_finite & jnp.allclose(
         new_fnval, loop_state.fnval, atol=atol, rtol=rtol))
+
     # Check if new guess satisfies the Armijo condition
     fnval_decreased = (
         new_fnval <= loop_state.fnval +
