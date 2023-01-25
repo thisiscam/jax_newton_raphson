@@ -105,6 +105,10 @@ class NewtonRaphsonResult(NamedTuple):
     }
     return msgs.get(self.status, "unknown status")
 
+  @property
+  def converged(self):
+    return self.status == 0
+
 
 def minimize(
     fn: Callable[[chex.ArrayTree], chex.Scalar],
@@ -125,7 +129,8 @@ def minimize(
   2. Backtracking line search to ensure that the function value decreases
   sufficiently at each step, that is, each newton step satisfies the Armijo
   condition. With these modifications, the algorithm is guaranteed to converge
-  to a global minimum on a convex function.
+  to a global minimum on a convex function with suffiently large valiues of 
+  `maxiter` and `maxls`.
 
   Note that this implementation sychronizes the calculations of the
   function's value, jacobian and hessian, when user invokes it in
@@ -146,7 +151,7 @@ def minimize(
     maxiter: maximum number of optimizer iterations; note that this includes
       the number of line search steps.
     maxls: maximum number of line search steps.
-    cho_beta, cho_tau_factor: for modified cholesky to ensure positive 
+    cho_beta, cho_tau_factor: for modified cholesky to ensure positive
     definiteness of the hessian. See `_cholesky_with_added_identity`.
 
   Returns:
@@ -255,9 +260,9 @@ def minimize(
       jnp.inf,
       jnp.zeros_like(initial_guess_flat),
       jnp.empty((x_dim, x_dim)),
-      jnp.array(0),
-      jnp.array(0),
-      jnp.array(False),
+      jnp.array(0, dtype=jnp.int32),
+      jnp.array(0, dtype=jnp.int32),
+      jnp.array(False, dtype=bool),
   )
 
   loop_state = jax.lax.while_loop(loop_cond, loop_body, initial_state)
