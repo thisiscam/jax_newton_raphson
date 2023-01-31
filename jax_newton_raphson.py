@@ -142,9 +142,6 @@ class Parameters(NamedTuple):
   cho_tau_factor: float
 
 
-_identity = lambda x: x
-
-
 def _ls_step(args):
   """Backtracking linesearch: Decrease step size by line_search_factor."""
   params, loop_state, _ = args
@@ -239,8 +236,11 @@ def minimize(
     cho_beta, cho_tau_factor: for modified cholesky to ensure positive
     definiteness of the hessian. See `_cholesky_with_added_identity`.
     parameter_mask: a pytree of boolean arrays with the same structure as the
-      input to `fn`. If provided, the optimizer will only update the parameters
-      where the mask is True.
+      input to `fn`. If provided, the optimized function `fn` must depend only
+      on the parameters where the corresponding mask is True. This is useful
+      for batching the optimization of multiple functions with different sets
+      of parameters. In that case, user may pad the parameters of each function
+      with zeros and set the corresponding mask to False.
 
   Returns:
     The optimizer result.
