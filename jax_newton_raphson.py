@@ -1,8 +1,7 @@
 """A Newton-Raphson optimizer in JAX."""
 
-from typing import Callable, NamedTuple, Tuple
+from typing import Callable, NamedTuple, Optional
 
-import collections
 import functools
 
 import jax
@@ -28,7 +27,7 @@ def _jacrev_and_value(f, x):
   return jac, y
 
 
-def _value_jac_and_hessian(f):
+def _value_jac_and_hessian(f, x):
   """Compute value, jacobian and hessian of a function in one go.
 
   For simplicity, we assume that `f` has vector input and scalar output.
@@ -41,15 +40,17 @@ def _value_jac_and_hessian(f):
     hessian).
   """
 
-  def wrapped(x):
-    (jac,), (hessian,), value = _value_and_jacfwd(
-        functools.partial(_jacrev_and_value, f),
-        x,
-        has_aux=True,
-    )
-    return value, jac.reshape(jac.size), hessian.reshape(jac.size, jac.size)
+  (jac,), (hessian,), value = _value_and_jacfwd(
+      functools.partial(_jacrev_and_value, f),
+      x,
+      has_aux=True,
+  )
+  return value, jac.reshape(jac.size), hessian.reshape(jac.size, jac.size)
 
-  return wrapped
+
+class CholeskyWithAddedIdentityLoopState(NamedTuple):
+  tau: float
+  cho_factor: chex.Array
 
 
 def _cholesky_with_added_identity(mat: chex.Array,
@@ -68,21 +69,25 @@ def _cholesky_with_added_identity(mat: chex.Array,
   Returns:
     The Cholesky factorization of `mat + identity`.
   """
-  LoopState = collections.namedtuple("LoopState", "tau cho_factor")
 
   min_diag = jnp.min(jnp.diagonal(mat))
   tau0 = jnp.where(min_diag > 0, jnp.zeros_like(min_diag), cho_beta - min_diag)
 
-  def loop_body(state: LoopState) -> LoopState:
+  def cond_fn(state: CholeskyWithAddedIdentityLoopState) -> bool:
+    return ~jnp.all(jnp.isfinite(state.cho_factor))
+
+  def loop_body(
+      state: CholeskyWithAddedIdentityLoopState
+  ) -> CholeskyWithAddedIdentityLoopState:
     cho_factor = jax.scipy.linalg.cholesky(mat +
                                            jnp.eye(mat.shape[0]) * state.tau)
     tau = jnp.maximum(cho_tau_factor * state.tau, cho_beta)
-    return LoopState(tau, cho_factor)
+    return CholeskyWithAddedIdentityLoopState(tau, cho_factor)
 
   loop_state = jax.lax.while_loop(
-      lambda state: ~jnp.all(jnp.isfinite(state.cho_factor)),
+      cond_fn,
       loop_body,
-      LoopState(tau0, jnp.full_like(mat, jnp.nan)),
+      CholeskyWithAddedIdentityLoopState(tau0, jnp.full_like(mat, jnp.nan)),
   )
   return loop_state.cho_factor
 
@@ -110,6 +115,85 @@ class NewtonRaphsonResult(NamedTuple):
     return self.status == 0
 
 
+class LoopState(NamedTuple):
+  """The state of the Newton-Raphson minimizer loop."""
+  guess: chex.Array
+  new_guess: chex.Array
+  fnval: float
+  jac: chex.Array
+  hessian: chex.Array
+  newton_step: int
+  ls_step: int
+  converged: bool
+
+
+class WorkingState(NamedTuple):
+  """For internal temporary storage inside the loop body."""
+  new_fnval: float
+  new_jac: chex.Array
+  new_hessian: chex.Array
+  is_finite: bool
+  fnval_decreased: bool
+
+
+class Parameters(NamedTuple):
+  line_search_factor: float
+  cho_beta: float
+  cho_tau_factor: float
+
+
+_identity = lambda x: x
+
+
+def _ls_step(args):
+  """Backtracking linesearch: Decrease step size by line_search_factor."""
+  params, loop_state, _ = args
+  new_guess_ = (loop_state.new_guess -
+                loop_state.guess) * params.line_search_factor + loop_state.guess
+  return loop_state._replace(new_guess=new_guess_,
+                             ls_step=loop_state.ls_step + 1)
+
+
+def _newton_guess_update(args):
+  """Update the guess using the Newton-Raphson step."""
+  params, loop_state, working_state = args
+  # If hesseian is not even finite, we just revert to gradient descent
+  # We do this before the cholesky factorization to avoid infinite looping
+  # in the factorization
+  new_hessian = working_state.new_hessian
+  new_hessian = jnp.where(jnp.all(jnp.isfinite(new_hessian)), new_hessian,
+                          jnp.eye(new_hessian.shape[0]))
+  cho_factor = _cholesky_with_added_identity(new_hessian, params.cho_beta,
+                                             params.cho_tau_factor)
+  u = jax.scipy.linalg.cho_solve((cho_factor, False), working_state.new_jac)
+  new_guess_ = loop_state.new_guess - u
+  return loop_state._replace(fnval=working_state.new_fnval,
+                             guess=loop_state.new_guess,
+                             new_guess=new_guess_,
+                             newton_step=loop_state.newton_step + 1,
+                             ls_step=0)
+
+
+def _do_line_search_or_newton_step(args) -> LoopState:
+  """Perform an update step if necessary."""
+  _, _, work_state = args
+  dont_need_line_search = work_state.is_finite & work_state.fnval_decreased
+  return jax.lax.cond(dont_need_line_search,
+                      _newton_guess_update,
+                      _ls_step,
+                      operand=args)
+
+
+def _do_converged(args) -> LoopState:
+  """Return the converged state."""
+  _, loop_state, working_state = args
+  return loop_state._replace(fnval=working_state.new_fnval,
+                             guess=loop_state.new_guess,
+                             jac=working_state.new_jac,
+                             hessian=working_state.new_hessian,
+                             converged=True)
+
+
 def minimize(
     fn: Callable[[chex.ArrayTree], chex.Scalar],
     initial_guess: chex.ArrayTree,
@@ -120,6 +204,7 @@ def minimize(
     maxls: int = 10,
     cho_beta: float = 1e-08,
     cho_tau_factor: float = 2.,
+    parameter_mask: Optional[chex.ArrayTree] = None,
 ) -> NewtonRaphsonResult:
   """Newton-Raphson minization in JAX, batchable and jit-able.
 
@@ -153,80 +238,39 @@ def minimize(
     maxls: maximum number of line search steps.
     cho_beta, cho_tau_factor: for modified cholesky to ensure positive
     definiteness of the hessian. See `_cholesky_with_added_identity`.
+    parameter_mask: a pytree of boolean arrays with the same structure as the
+      input to `fn`. If provided, the optimizer will only update the parameters
+      where the mask is True.
 
   Returns:
     The optimizer result.
   """
   chex.assert_shape(jax.eval_shape(fn, initial_guess), tuple())
 
+  params = Parameters(line_search_factor, cho_beta, cho_tau_factor)
+
   initial_guess_flat, guess_unraveler = jax.flatten_util.ravel_pytree(
       initial_guess)
   x_dim = initial_guess_flat.size
 
+  if parameter_mask is not None:
+    chex.assert_trees_all_equal_shapes(initial_guess, parameter_mask)
+    parameter_mask, _ = jax.flatten_util.ravel_pytree(parameter_mask)
+
   def flatten_fn(guess):
     return fn(guess_unraveler(guess))
 
-  value_jac_and_hessian_fn = _value_jac_and_hessian(flatten_fn)
-
-  # State for newton-raphson loop
-  LoopState = collections.namedtuple(
-      "LoopState",
-      "guess new_guess fnval jac hessian newton_step ls_step converged")
-
-  # For internal temporay storage inside the loop body
-  WorkingState = collections.namedtuple(
-      "WorkingState", "new_fnval new_jac new_hessian is_finite fnval_decreased")
-
-  def _ls_step(args):
-    """Backtracking linesearch: Decrease step size by line_search_factor."""
-    loop_state, _ = args
-    new_guess_ = (loop_state.new_guess -
-                  loop_state.guess) * line_search_factor + loop_state.guess
-    return loop_state._replace(new_guess=new_guess_,
-                               ls_step=loop_state.ls_step + 1)
-
-  def _newton_guess_update(args):
-    """Update the guess using the Newton-Raphson step."""
-    loop_state, working_state = args
-    # If hesseian is not even finite, we just revert to gradient descent
-    # We do this before the cholesky factorization to avoid infinite looping
-    # in the factorization
-    new_hessian = working_state.new_hessian
-    new_hessian = jnp.where(jnp.all(jnp.isfinite(new_hessian)), new_hessian,
-                            jnp.eye(new_hessian.shape[0]))
-    cho_factor = _cholesky_with_added_identity(new_hessian, cho_beta,
-                                               cho_tau_factor)
-    u = jax.scipy.linalg.cho_solve((cho_factor, False), working_state.new_jac)
-    new_guess_ = loop_state.new_guess - u
-    return loop_state._replace(fnval=working_state.new_fnval,
-                               guess=loop_state.new_guess,
-                               new_guess=new_guess_,
-                               newton_step=loop_state.newton_step + 1,
-                               ls_step=0)
-
-  def _do_line_search_or_newton_step(
-      args: Tuple[LoopState, WorkingState]) -> LoopState:
-    """Perform an update step if necessary."""
-    _, work_state = args
-    dont_need_line_search = work_state.is_finite & work_state.fnval_decreased
-    return jax.lax.cond(dont_need_line_search,
-                        _newton_guess_update,
-                        _ls_step,
-                        operand=args)
-
-  def _do_converged(args: Tuple[LoopState, WorkingState]) -> LoopState:
-    """Return the converged state."""
-    loop_state, working_state = args
-    return loop_state._replace(fnval=working_state.new_fnval,
-                               guess=loop_state.new_guess,
-                               jac=working_state.new_jac,
-                               hessian=working_state.new_hessian,
-                               converged=True)
-
   def loop_body(loop_state: LoopState) -> LoopState:
     """Newton-Raphson loop body."""
-    new_fnval, new_jac, new_hessian = value_jac_and_hessian_fn(
-        loop_state.new_guess)
+    new_fnval, new_jac, new_hessian = _value_jac_and_hessian(
+        flatten_fn, loop_state.new_guess)
+
+    if parameter_mask is not None:
+      avg_diag = (jnp.sum(jnp.abs(jnp.diagonal(new_hessian))) /
+                  jnp.sum(parameter_mask))
+      diag_idx = jnp.diag_indices(new_hessian.shape[0])
+      new_hessian = new_hessian.at[diag_idx].add(avg_diag *
+                                                 (1 - parameter_mask))
 
     is_finite = (jnp.all(jnp.isfinite(new_fnval)) &
                  jnp.all(jnp.isfinite(new_jac)))
@@ -245,7 +289,7 @@ def minimize(
         (converged & ((loop_state.newton_step > 0) | (loop_state.ls_step > 0))),
         _do_converged,
         _do_line_search_or_newton_step,
-        operand=(loop_state, working_state),
+        operand=(params, loop_state, working_state),
     )
 
   def loop_cond(loop_state: LoopState):
@@ -267,14 +311,8 @@ def minimize(
 
   loop_state = jax.lax.while_loop(loop_cond, loop_body, initial_state)
 
-  def do_recover_last(loop_state: LoopState) -> LoopState:
-    fnval, jac, hessian = value_jac_and_hessian_fn(loop_state.guess)
-    return loop_state._replace(fnval=fnval, jac=jac, hessian=hessian)
-
-  loop_state = jax.lax.cond(loop_state.converged,
-                            lambda state: state,
-                            do_recover_last,
-                            operand=loop_state)
+  fnval, jac, hessian = _value_jac_and_hessian(flatten_fn, loop_state.guess)
+  loop_state = loop_state._replace(fnval=fnval, jac=jac, hessian=hessian)
 
   return NewtonRaphsonResult(
       guess_unraveler(loop_state.guess),
