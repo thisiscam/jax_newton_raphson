@@ -79,8 +79,8 @@ def _cholesky_with_added_identity(mat: chex.Array,
   def loop_body(
       state: CholeskyWithAddedIdentityLoopState
   ) -> CholeskyWithAddedIdentityLoopState:
-    cho_factor = jax.scipy.linalg.cholesky(mat +
-                                           jnp.eye(mat.shape[0]) * state.tau)
+    cho_factor = jax.scipy.linalg.cholesky(
+        mat + jnp.eye(mat.shape[0], dtype=mat.dtype) * state.tau)
     tau = jnp.maximum(cho_tau_factor * state.tau, cho_beta)
     return CholeskyWithAddedIdentityLoopState(tau, cho_factor)
 
@@ -158,8 +158,9 @@ def _newton_guess_update(args):
   # We do this before the cholesky factorization to avoid infinite looping
   # in the factorization
   new_hessian = working_state.new_hessian
-  new_hessian = jnp.where(jnp.all(jnp.isfinite(new_hessian)), new_hessian,
-                          jnp.eye(new_hessian.shape[0]))
+  new_hessian = jnp.where(
+      jnp.all(jnp.isfinite(new_hessian)), new_hessian,
+      jnp.eye(new_hessian.shape[0], dtype=new_hessian.dtype))
   cho_factor = _cholesky_with_added_identity(new_hessian, params.cho_beta,
                                              params.cho_tau_factor)
   u = jax.scipy.linalg.cho_solve((cho_factor, False), working_state.new_jac)
@@ -168,7 +169,7 @@ def _newton_guess_update(args):
                              guess=loop_state.new_guess,
                              new_guess=new_guess_,
                              newton_step=loop_state.newton_step + 1,
-                             ls_step=0)
+                             ls_step=jnp.array(0, dtype=jnp.int32))
 
 
 def _do_line_search_or_newton_step(args) -> LoopState:
@@ -303,9 +304,9 @@ def minimize(
       initial_guess_flat,
       jnp.inf,
       jnp.zeros_like(initial_guess_flat),
-      jnp.empty((x_dim, x_dim)),
-      jnp.array(0, dtype=int),
-      jnp.array(0, dtype=int),
+      jnp.empty((x_dim, x_dim), dtype=initial_guess.dtype),
+      jnp.array(0, dtype=jnp.int32),
+      jnp.array(0, dtype=jnp.int32),
       jnp.array(False, dtype=bool),
   )
 
