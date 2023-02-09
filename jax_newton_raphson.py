@@ -234,7 +234,7 @@ def minimize(
       the number of line search steps.
     maxls: maximum number of line search steps.
     cho_beta, cho_tau_factor: for modified cholesky to ensure positive
-    definiteness of the hessian. See `_cholesky_with_added_identity`.
+      definiteness of the hessian. See `_cholesky_with_added_identity`.
     parameter_mask: a pytree of boolean arrays with the same structure as the
       input to `fn`. If provided, the optimized function `fn` must depend only
       on the parameters where the corresponding mask is True. This is useful
@@ -304,8 +304,8 @@ def minimize(
       jnp.inf,
       jnp.zeros_like(initial_guess_flat),
       jnp.empty((x_dim, x_dim)),
-      jnp.array(0, dtype=jnp.int32),
-      jnp.array(0, dtype=jnp.int32),
+      jnp.array(0, dtype=int),
+      jnp.array(0, dtype=int),
       jnp.array(False, dtype=bool),
   )
 
