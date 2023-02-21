@@ -304,7 +304,7 @@ def minimize(
       initial_guess_flat,
       jnp.inf,
       jnp.zeros_like(initial_guess_flat),
-      jnp.empty((x_dim, x_dim), dtype=initial_guess.dtype),
+      jnp.empty((x_dim, x_dim), dtype=initial_guess_flat.dtype),
       jnp.array(0, dtype=jnp.int32),
       jnp.array(0, dtype=jnp.int32),
       jnp.array(False, dtype=bool),
