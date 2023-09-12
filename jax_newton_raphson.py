@@ -212,7 +212,7 @@ def minimize(
   2. Backtracking line search to ensure that the function value decreases
   sufficiently at each step, that is, each newton step satisfies the Armijo
   condition. With these modifications, the algorithm is guaranteed to converge
-  to a global minimum on a convex function with suffiently large values of 
+  to a global minimum on a convex function with sufficiently large values of 
   `maxiter` and `maxls`.
 
   Note that this implementation sychronizes the calculations of the
